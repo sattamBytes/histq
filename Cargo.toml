@@ -1,6 +1,6 @@
 [package]
 name = "histq"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Project-aware shell history for zsh: an up-arrow that knows your repo"
 license = "MIT"
@@ -13,7 +13,11 @@ categories = ["command-line-utilities"]
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
-crossterm = "0.28"
+# use-dev-tty: read keys from /dev/tty via select() — required because the
+# zsh widget runs `pick` inside $(...) where stdin is not the terminal, and
+# macOS kqueue cannot poll /dev/tty (crossterm's default event source fails
+# with "Failed to initialize input reader").
+crossterm = { version = "0.28", features = ["use-dev-tty", "events"] }
 directories = "5"
 regex = "1"
 rusqlite = { version = "0.31", features = ["bundled"] }
