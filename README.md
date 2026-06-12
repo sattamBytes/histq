@@ -34,17 +34,42 @@ in three deliberate ways:
 
 ## Installation
 
-Requires Rust (1.80+) and zsh.
+### Homebrew (macOS / Linux)
 
 ```sh
-cargo install --path .
-# or, once published: cargo install histq
+brew install rajsattamsahoo/tap/histq
 ```
 
-Then add one line to `~/.zshrc`:
+### Shell installer (macOS / Linux, no dependencies)
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/rajsattamsahoo/histq/releases/latest/download/histq-installer.sh | sh
+```
+
+### Cargo (requires Rust 1.80+)
+
+```sh
+cargo install histq
+# or from a checkout:
+cargo install --path .
+```
+
+Prebuilt binaries for Apple Silicon / Intel macOS and x86_64 / aarch64 Linux
+are attached to every [GitHub release](https://github.com/rajsattamsahoo/histq/releases).
+
+### Enable the zsh integration
+
+Whichever way you installed the binary, add one line to `~/.zshrc`:
 
 ```sh
 eval "$(histq init zsh)"
+```
+
+Or, with a zsh plugin manager (the binary still needs to be installed first):
+
+```sh
+zinit load rajsattamsahoo/histq        # zinit
+antidote install rajsattamsahoo/histq  # antidote
 ```
 
 Open a new shell and start typing. The database lives at
@@ -167,6 +192,15 @@ keypress against a few-thousand-row database, including process startup.
 cargo test          # unit + integration tests (storage, ranking, parsing, redaction, CLI)
 cargo build --release
 ```
+
+CI runs fmt, clippy, and tests on Ubuntu and macOS for every push.
+
+**Releasing:** push a tag like `v0.1.0` and the [release workflow](.github/workflows/release.yml)
+([cargo-dist](https://github.com/axodotdev/cargo-dist)) builds binaries for all
+four targets, creates the GitHub release with the shell installer, and pushes
+the Homebrew formula to the tap. One-time setup: create the
+`rajsattamsahoo/homebrew-tap` repo and add a `HOMEBREW_TAP_TOKEN` repo secret
+(a fine-grained PAT with write access to the tap).
 
 ## License
 

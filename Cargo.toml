@@ -5,6 +5,7 @@ edition = "2021"
 description = "Project-aware shell history for zsh: an up-arrow that knows your repo"
 license = "MIT"
 repository = "https://github.com/rajsattamsahoo/histq"
+homepage = "https://github.com/rajsattamsahoo/histq"
 keywords = ["zsh", "history", "shell", "cli", "sqlite"]
 categories = ["command-line-utilities"]
 
@@ -25,3 +26,26 @@ tempfile = "3"
 lto = true
 codegen-units = 1
 strip = true
+
+# Config for 'dist'
+[workspace.metadata.dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.32.0"
+# CI backends to support
+ci = "github"
+# The installers to generate for each app
+installers = ["shell", "homebrew"]
+# A GitHub repo to push Homebrew formulas to
+tap = "rajsattamsahoo/homebrew-tap"
+# Publish jobs to run in CI
+publish-jobs = ["homebrew"]
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
+# Whether to install an updater program
+install-updater = false
+# Path that installers should place binaries in
+install-path = "CARGO_HOME"
+
+[profile.dist]
+inherits = "release"
+lto = "thin"
