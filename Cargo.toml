@@ -1,0 +1,27 @@
+[package]
+name = "histq"
+version = "0.1.0"
+edition = "2021"
+description = "Project-aware shell history for zsh: an up-arrow that knows your repo"
+license = "MIT"
+repository = "https://github.com/rajsattamsahoo/histq"
+keywords = ["zsh", "history", "shell", "cli", "sqlite"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+clap = { version = "4", features = ["derive"] }
+directories = "5"
+regex = "1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+tempfile = "3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
