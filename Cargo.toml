@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 description = "Project-aware shell history for zsh: an up-arrow that knows your repo"
 license = "MIT"
-repository = "https://github.com/rajsattamsahoo/histq"
-homepage = "https://github.com/rajsattamsahoo/histq"
+repository = "https://github.com/sattamBytes/histq"
+homepage = "https://github.com/sattamBytes/histq"
 keywords = ["zsh", "history", "shell", "cli", "sqlite"]
 categories = ["command-line-utilities"]
 
@@ -36,7 +36,7 @@ ci = "github"
 # The installers to generate for each app
 installers = ["shell", "homebrew"]
 # A GitHub repo to push Homebrew formulas to
-tap = "rajsattamsahoo/homebrew-tap"
+tap = "sattamBytes/homebrew-tap"
 # Publish jobs to run in CI
 publish-jobs = ["homebrew"]
 # Target platforms to build apps for (Rust target-triple syntax)

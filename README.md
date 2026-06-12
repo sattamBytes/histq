@@ -37,13 +37,13 @@ in three deliberate ways:
 ### Homebrew (macOS / Linux)
 
 ```sh
-brew install rajsattamsahoo/tap/histq
+brew install sattamBytes/tap/histq
 ```
 
 ### Shell installer (macOS / Linux, no dependencies)
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/rajsattamsahoo/histq/releases/latest/download/histq-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/sattamBytes/histq/releases/latest/download/histq-installer.sh | sh
 ```
 
 ### Cargo (requires Rust 1.80+)
@@ -55,7 +55,7 @@ cargo install --path .
 ```
 
 Prebuilt binaries for Apple Silicon / Intel macOS and x86_64 / aarch64 Linux
-are attached to every [GitHub release](https://github.com/rajsattamsahoo/histq/releases).
+are attached to every [GitHub release](https://github.com/sattamBytes/histq/releases).
 
 ### Enable the zsh integration
 
@@ -68,8 +68,8 @@ eval "$(histq init zsh)"
 Or, with a zsh plugin manager (the binary still needs to be installed first):
 
 ```sh
-zinit load rajsattamsahoo/histq        # zinit
-antidote install rajsattamsahoo/histq  # antidote
+zinit load sattamBytes/histq        # zinit
+antidote install sattamBytes/histq  # antidote
 ```
 
 Open a new shell and start typing. The database lives at
@@ -199,7 +199,7 @@ CI runs fmt, clippy, and tests on Ubuntu and macOS for every push.
 ([cargo-dist](https://github.com/axodotdev/cargo-dist)) builds binaries for all
 four targets, creates the GitHub release with the shell installer, and pushes
 the Homebrew formula to the tap. One-time setup: create the
-`rajsattamsahoo/homebrew-tap` repo and add a `HOMEBREW_TAP_TOKEN` repo secret
+`sattamBytes/homebrew-tap` repo and add a `HOMEBREW_TAP_TOKEN` repo secret
 (a fine-grained PAT with write access to the tap).
 
 ## License
