@@ -55,9 +55,18 @@ static PATTERNS: LazyLock<Vec<(Regex, String)>> = LazyLock::new(|| {
 });
 
 pub fn redact(command: &str) -> String {
+    redact_with(command, &[])
+}
+
+/// Built-in patterns plus user-supplied extras from the config file.
+/// Extra patterns redact the entire match.
+pub fn redact_with(command: &str, extra: &[Regex]) -> String {
     let mut out = command.to_string();
     for (re, replacement) in PATTERNS.iter() {
         out = re.replace_all(&out, replacement.as_str()).into_owned();
+    }
+    for re in extra {
+        out = re.replace_all(&out, REDACTED).into_owned();
     }
     out
 }

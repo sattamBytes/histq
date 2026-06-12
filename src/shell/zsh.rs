@@ -70,11 +70,25 @@ _histq_down() {
   fi
 }
 
+# Ctrl+R: full-screen picker. The TUI draws on the alternate screen via
+# stderr; only the chosen command comes back on stdout.
+_histq_pick() {
+  local result
+  result=$(histq pick --query "$BUFFER")
+  if [[ -n $result ]]; then
+    BUFFER="$result"
+    CURSOR=$#BUFFER
+  fi
+  zle reset-prompt
+}
+
 zle -N _histq_up
 zle -N _histq_down
+zle -N _histq_pick
 # Both CSI and SS3 arrow sequences, so it works across terminal modes.
 bindkey '^[[A' _histq_up
 bindkey '^[OA' _histq_up
 bindkey '^[[B' _histq_down
 bindkey '^[OB' _histq_down
+bindkey '^R' _histq_pick
 "#;

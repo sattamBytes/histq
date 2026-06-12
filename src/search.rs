@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 
 use chrono::{DateTime, Local, TimeZone};
+use serde::Deserialize;
 
 use crate::db::Candidate;
 
@@ -117,36 +118,56 @@ pub struct RankContext {
     pub query_tags: Vec<String>,
 }
 
-// Text match must outweigh the combined context bonuses (W_REPO + W_CWD),
-// so an explicit query is never drowned out by "same place" candidates.
-const W_TEXT: f64 = 4.0;
-const W_REPO: f64 = 2.0;
-const W_CWD: f64 = 1.5;
-const W_RECENCY: f64 = 1.0;
-const W_SUCCESS: f64 = 0.5;
-const W_TAGS: f64 = 1.0;
-const RECENCY_HALF_LIFE_DAYS: f64 = 7.0;
+/// Ranking weights. Defaults are tuned so that, with an explicit query, text
+/// match outweighs the combined context bonuses (repo + cwd) — an explicit
+/// query is never drowned out by "same place" candidates. Overridable via the
+/// `[weights]` section of the config file.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct Weights {
+    pub text: f64,
+    pub repo: f64,
+    pub cwd: f64,
+    pub recency: f64,
+    pub success: f64,
+    pub tags: f64,
+    pub recency_half_life_days: f64,
+}
+
+impl Default for Weights {
+    fn default() -> Self {
+        Weights {
+            text: 4.0,
+            repo: 2.0,
+            cwd: 1.5,
+            recency: 1.0,
+            success: 0.5,
+            tags: 1.0,
+            recency_half_life_days: 7.0,
+        }
+    }
+}
 
 /// Score a single candidate. `max_relevance` is the best (-bm25) in the
 /// candidate set, used to normalize the text component to 0..1.
-pub fn score(candidate: &Candidate, ctx: &RankContext, max_relevance: f64) -> f64 {
+pub fn score(candidate: &Candidate, ctx: &RankContext, w: &Weights, max_relevance: f64) -> f64 {
     let mut s = 0.0;
 
     if let Some(rank) = candidate.fts_rank {
         if max_relevance > 0.0 {
-            s += W_TEXT * ((-rank) / max_relevance).clamp(0.0, 1.0);
+            s += w.text * ((-rank) / max_relevance).clamp(0.0, 1.0);
         }
     }
     if candidate.git_repo.is_some() && candidate.git_repo == ctx.git_repo {
-        s += W_REPO;
+        s += w.repo;
     }
     if candidate.cwd == ctx.cwd {
-        s += W_CWD;
+        s += w.cwd;
     }
     let age_days = (ctx.now_ms - candidate.started_at).max(0) as f64 / DAY_MS as f64;
-    s += W_RECENCY * 0.5_f64.powf(age_days / RECENCY_HALF_LIFE_DAYS);
+    s += w.recency * 0.5_f64.powf(age_days / w.recency_half_life_days);
     if candidate.exit_code == Some(0) {
-        s += W_SUCCESS;
+        s += w.success;
     }
     if !ctx.query_tags.is_empty() {
         let candidate_tags: HashSet<&str> = candidate.tags.split_whitespace().collect();
@@ -155,14 +176,14 @@ pub fn score(candidate: &Candidate, ctx: &RankContext, max_relevance: f64) -> f6
             .iter()
             .filter(|t| candidate_tags.contains(t.as_str()))
             .count();
-        s += W_TAGS * overlap as f64 / ctx.query_tags.len() as f64;
+        s += w.tags * overlap as f64 / ctx.query_tags.len() as f64;
     }
     s
 }
 
 /// Rank candidates: score, sort (ties broken by recency), and dedupe by
 /// command text keeping the best-scored instance.
-pub fn rank(candidates: Vec<Candidate>, ctx: &RankContext) -> Vec<Candidate> {
+pub fn rank(candidates: Vec<Candidate>, ctx: &RankContext, w: &Weights) -> Vec<Candidate> {
     let max_relevance = candidates
         .iter()
         .filter_map(|c| c.fts_rank.map(|r| -r))
@@ -170,7 +191,7 @@ pub fn rank(candidates: Vec<Candidate>, ctx: &RankContext) -> Vec<Candidate> {
 
     let mut scored: Vec<(f64, Candidate)> = candidates
         .into_iter()
-        .map(|c| (score(&c, ctx, max_relevance), c))
+        .map(|c| (score(&c, ctx, w, max_relevance), c))
         .collect();
     scored.sort_by(|a, b| {
         b.0.partial_cmp(&a.0)

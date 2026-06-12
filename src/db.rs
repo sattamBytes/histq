@@ -39,6 +39,17 @@ pub struct Db {
     conn: Connection,
 }
 
+/// Aggregates returned by [`Db::stats`]. Grouped rows are `(label, count, fail_count)`.
+pub struct Stats {
+    pub total: i64,
+    pub succeeded: i64,
+    pub failed: i64,
+    pub top_commands: Vec<(String, i64, i64)>,
+    pub failing: Vec<(String, i64, i64)>,
+    pub top_dirs: Vec<(String, i64, i64)>,
+    pub by_hour: Vec<i64>,
+}
+
 /// Resolve the database path: `$HISTQ_DB` if set, otherwise the XDG data dir.
 pub fn default_path() -> Result<PathBuf> {
     if let Ok(p) = std::env::var("HISTQ_DB") {
@@ -154,6 +165,181 @@ impl Db {
             params![exit_code, now_ms, session],
         )?;
         Ok(updated > 0)
+    }
+
+    /// Session id used for rows backfilled by `histq import`.
+    pub const IMPORT_SESSION: &'static str = "imported";
+
+    /// Bulk-insert imported entries `(command, started_at_ms, duration_ms)`.
+    /// Idempotent: timestamped rows dedupe on command + timestamp; rows
+    /// without a real timestamp (plain history format, `started_at` None)
+    /// dedupe on command text alone — their fallback timestamp differs
+    /// between runs, so it can't participate in the identity check.
+    /// Imported rows get exit_code 0 (unknown, but assuming success keeps
+    /// them reachable by arrow navigation) and an empty cwd so they never
+    /// collect a same-directory ranking bonus.
+    pub fn import_entries(
+        &self,
+        rows: &[(String, Option<i64>, Option<i64>)],
+        fallback_ts: i64,
+    ) -> Result<(usize, usize)> {
+        self.conn.execute_batch("BEGIN")?;
+        let result = (|| {
+            let mut exists_with_ts = self.conn.prepare(
+                "SELECT EXISTS(SELECT 1 FROM commands
+                 WHERE session_id = ?1 AND command = ?2 AND started_at = ?3)",
+            )?;
+            let mut exists_command = self.conn.prepare(
+                "SELECT EXISTS(SELECT 1 FROM commands
+                 WHERE session_id = ?1 AND command = ?2)",
+            )?;
+            let mut insert = self.conn.prepare(
+                "INSERT INTO commands
+                 (command, cwd, git_repo, git_branch, started_at, duration_ms, exit_code, tags, session_id)
+                 VALUES (?1, '', NULL, NULL, ?2, ?3, 0, '', ?4)",
+            )?;
+            let mut imported = 0;
+            let mut skipped = 0;
+            for (command, started_at, duration_ms) in rows {
+                let already: bool = match started_at {
+                    Some(ts) => exists_with_ts
+                        .query_row(params![Self::IMPORT_SESSION, command, ts], |r| r.get(0))?,
+                    None => exists_command
+                        .query_row(params![Self::IMPORT_SESSION, command], |r| r.get(0))?,
+                };
+                if already {
+                    skipped += 1;
+                } else {
+                    insert.execute(params![
+                        command,
+                        started_at.unwrap_or(fallback_ts),
+                        duration_ms,
+                        Self::IMPORT_SESSION
+                    ])?;
+                    imported += 1;
+                }
+            }
+            Ok::<_, anyhow::Error>((imported, skipped))
+        })();
+        match result {
+            Ok(counts) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(counts)
+            }
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
+    }
+
+    /// Delete rows by id. Returns how many were actually deleted.
+    pub fn delete_ids(&self, ids: &[i64]) -> Result<usize> {
+        let mut deleted = 0;
+        for id in ids {
+            deleted += self
+                .conn
+                .execute("DELETE FROM commands WHERE id = ?1", params![id])?;
+        }
+        Ok(deleted)
+    }
+
+    /// Find rows whose command contains a literal substring (no FTS
+    /// tokenization — exact match works even inside tokens, which matters
+    /// when hunting down an accidentally stored secret).
+    pub fn find_containing(&self, needle: &str, limit: usize) -> Result<Vec<Candidate>> {
+        let escaped = needle
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let mut stmt = self.conn.prepare(
+            "SELECT c.id, c.command, c.cwd, c.git_repo, c.git_branch,
+                    c.started_at, c.duration_ms, c.exit_code, c.tags, NULL
+             FROM commands c
+             WHERE c.command LIKE '%' || ?1 || '%' ESCAPE '\\'
+             ORDER BY c.started_at DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![escaped, limit as i64], |row| {
+            Ok(Candidate {
+                id: row.get(0)?,
+                command: row.get(1)?,
+                cwd: row.get(2)?,
+                git_repo: row.get(3)?,
+                git_branch: row.get(4)?,
+                started_at: row.get(5)?,
+                duration_ms: row.get(6)?,
+                exit_code: row.get(7)?,
+                tags: row.get(8)?,
+                fts_rank: row.get(9)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Aggregates for `histq stats`.
+    pub fn stats(&self, top_limit: usize) -> Result<Stats> {
+        let (total, succeeded, failed): (i64, i64, i64) = self.conn.query_row(
+            "SELECT COUNT(*),
+                    COALESCE(SUM(exit_code = 0), 0),
+                    COALESCE(SUM(exit_code IS NOT NULL AND exit_code <> 0), 0)
+             FROM commands",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
+
+        let top_commands = self.grouped(
+            "SELECT command, COUNT(*) AS n,
+                    COALESCE(SUM(exit_code IS NOT NULL AND exit_code <> 0), 0)
+             FROM commands GROUP BY command ORDER BY n DESC LIMIT ?1",
+            top_limit,
+        )?;
+
+        let failing = self.grouped(
+            "SELECT command, COUNT(*) AS n,
+                    COALESCE(SUM(exit_code IS NOT NULL AND exit_code <> 0), 0) AS fails
+             FROM commands GROUP BY command
+             HAVING n >= 3 AND fails > 0
+             ORDER BY CAST(fails AS REAL) / n DESC, n DESC LIMIT ?1",
+            top_limit,
+        )?;
+
+        let top_dirs = self.grouped(
+            "SELECT cwd, COUNT(*) AS n, 0 FROM commands
+             WHERE cwd <> '' GROUP BY cwd ORDER BY n DESC LIMIT ?1",
+            top_limit,
+        )?;
+
+        let mut by_hour = vec![0i64; 24];
+        let mut stmt = self.conn.prepare(
+            "SELECT CAST(strftime('%H', started_at / 1000, 'unixepoch', 'localtime') AS INTEGER),
+                    COUNT(*)
+             FROM commands WHERE session_id <> 'imported' GROUP BY 1",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?;
+        for row in rows {
+            let (hour, n) = row?;
+            if (0..24).contains(&hour) {
+                by_hour[hour as usize] = n;
+            }
+        }
+
+        Ok(Stats {
+            total,
+            succeeded,
+            failed,
+            top_commands,
+            failing,
+            top_dirs,
+            by_hour,
+        })
+    }
+
+    fn grouped(&self, sql: &str, limit: usize) -> Result<Vec<(String, i64, i64)>> {
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map(params![limit as i64], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
     /// Fetch candidate rows for a parsed query. Ranking happens in Rust

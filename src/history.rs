@@ -99,11 +99,16 @@ pub fn extract_tags(command: &str) -> Vec<String> {
 /// Record the start of a command (called from zsh `preexec`).
 /// Commands starting with a space are not recorded at all — the conventional
 /// privacy escape hatch.
-pub fn record_start(db: &Db, session: &str, raw_command: &str) -> Result<()> {
+pub fn record_start(
+    db: &Db,
+    session: &str,
+    raw_command: &str,
+    extra_redact: &[regex::Regex],
+) -> Result<()> {
     if raw_command.trim().is_empty() || raw_command.starts_with(' ') {
         return Ok(());
     }
-    let command = redact::redact(raw_command.trim_end());
+    let command = redact::redact_with(raw_command.trim_end(), extra_redact);
     let tags = extract_tags(&command).join(" ");
     let cwd = std::env::current_dir()?;
     let git = git_context(&cwd);

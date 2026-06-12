@@ -75,9 +75,17 @@ antidote install sattamBytes/histq  # antidote
 Open a new shell and start typing. The database lives at
 `~/.local/share/histq/history.db` (override with `$HISTQ_DB`).
 
-> Note: histq starts with an empty database — it records from the moment you
-> install it. Your old `~/.zsh_history` is not imported (planned as `histq
-> import` in a future version).
+Bring your years of accumulated history along:
+
+```sh
+histq import                      # backfills from ~/.zsh_history
+histq import --file ~/.bash_history
+```
+
+Both zsh formats are handled (extended history keeps its timestamps; plain
+entries import without them). Importing is idempotent — re-running it never
+duplicates. Imported entries carry no directory/git/exit metadata, so live
+recorded history naturally outranks them over time.
 
 ## Usage
 
@@ -88,6 +96,9 @@ Open a new shell and start typing. The database lives at
   docker commands, preferring this repo, recent, and successful ones.
 - **↑ ↑ ↑** — step deeper into the ranked results.
 - **↓** — step back toward what you originally typed.
+- **Ctrl+R** — full-screen picker for visual scanning: type to refine the
+  query (results re-rank live, same rule words as `search`), ↑/↓ to move,
+  Enter to put the selection on your command line, Esc to cancel.
 - When there are no (more) results, the terminal beeps and the line is left alone.
 
 ### Searching
@@ -121,14 +132,59 @@ cargo publish  # release
 histq search #release
 ```
 
+### Stats
+
+```sh
+histq stats
+```
+
+Shows totals and success rate, your most-used commands (with bars and failure
+counts), the commands that fail most often, busiest directories, and an
+hour-of-day histogram.
+
 ### Privacy
 
 - Everything is local: one SQLite file, no network access, ever.
 - Secrets are redacted **before storage**: `Authorization` headers,
   `key=value` assignments for sensitive key names (`API_KEY`, `PASSWORD`,
   `TOKEN`, ...), `--password`-style flags, and known token shapes (AWS,
-  GitHub, Slack, JWT) are replaced with `***REDACTED***`.
+  GitHub, Slack, JWT) are replaced with `***REDACTED***`. Add your own
+  patterns in the config file (below).
 - Start a command with a **space** and it is not recorded at all.
+- Something slipped through anyway? Delete it:
+
+  ```sh
+  histq delete --contains "oops-secret"        # lists matches with their ids
+  histq delete --contains "oops-secret" --yes  # actually deletes them
+  histq delete 1234 1235                       # or by id from `histq timeline`
+  ```
+
+### Configuration (optional)
+
+Everything works with no config. To tune behavior, create
+`~/.config/histq/config.toml` (or point `$HISTQ_CONFIG` at a file):
+
+```toml
+# how many rows SQLite hands to the ranking pass
+candidate_limit = 500
+
+# ranking weights — e.g. bias hard toward recency, ignore directory:
+[weights]
+text = 4.0
+repo = 2.0
+cwd = 1.5
+recency = 1.0
+success = 0.5
+tags = 1.0
+recency_half_life_days = 7.0
+
+# your organization's internal token shapes, redacted before storage:
+[redact]
+extra_patterns = ['mycorp_[A-Za-z0-9]{32}', 'internal-token-[0-9a-f]+']
+```
+
+All fields are optional; unknown keys are rejected loudly so typos can't
+silently change behavior.
 
 ## Commands
 
@@ -140,17 +196,24 @@ histq search #release
 | `histq previous --query Q --offset N` | print the Nth-best match (up-arrow widget) |
 | `histq next --query Q --offset N` | same result set, used by the down-arrow widget |
 | `histq search [QUERY...]` | ranked search |
-| `histq timeline [QUERY...]` | chronological history |
+| `histq timeline [QUERY...]` | chronological history (shows entry ids) |
+| `histq import [--file F]` | backfill from an existing history file |
+| `histq delete IDS... / --contains TEXT --yes` | remove entries |
+| `histq pick [--query Q]` | interactive picker (the Ctrl+R widget) |
+| `histq stats [--limit N]` | usage statistics |
 
 ## Architecture
 
 ```
 src/
 ├── main.rs       CLI entrypoint (clap), output formatting
+├── config.rs     optional config.toml (weights, limits, extra redaction)
 ├── db.rs         SQLite schema + queries (rusqlite, FTS5, WAL)
 ├── history.rs    record-start/record-end, git context, tag extraction
+├── import.rs     ~/.zsh_history parsing + idempotent backfill
 ├── search.rs     query parsing (rule words) + ranking
 ├── redact.rs     secret redaction patterns
+├── tui.rs        the Ctrl+R picker (crossterm, alternate screen)
 └── shell/
     └── zsh.rs    the script printed by `histq init zsh`
 ```
@@ -175,6 +238,8 @@ score = 4.0 · text match        (normalized bm25)
       + 0.5 · exited 0
       + 1.0 · tag overlap
 ```
+
+(All weights configurable via `[weights]` in the config file.)
 
 Duplicate command texts are collapsed, keeping the best-scored instance.
 

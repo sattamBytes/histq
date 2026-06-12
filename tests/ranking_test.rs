@@ -1,5 +1,5 @@
 use histq::db::Candidate;
-use histq::search::{rank, RankContext};
+use histq::search::{rank, RankContext, Weights};
 
 const DAY_MS: i64 = 86_400_000;
 const NOW: i64 = 100 * DAY_MS;
@@ -35,7 +35,7 @@ fn same_repo_beats_other_repo() {
     let mut elsewhere = candidate("npm test");
     elsewhere.git_repo = Some("/home/raj/other".to_string());
 
-    let ranked = rank(vec![elsewhere, here], &ctx());
+    let ranked = rank(vec![elsewhere, here], &ctx(), &Weights::default());
     assert_eq!(ranked[0].command, "cargo test");
 }
 
@@ -45,7 +45,7 @@ fn same_cwd_beats_other_cwd() {
     here.cwd = "/home/raj/project/api".to_string();
     let elsewhere = candidate("ls -lh");
 
-    let ranked = rank(vec![elsewhere, here], &ctx());
+    let ranked = rank(vec![elsewhere, here], &ctx(), &Weights::default());
     assert_eq!(ranked[0].command, "ls -la");
 }
 
@@ -56,7 +56,7 @@ fn recent_beats_old() {
     let mut old = candidate("git fetch");
     old.started_at = NOW - 60 * DAY_MS;
 
-    let ranked = rank(vec![old, recent], &ctx());
+    let ranked = rank(vec![old, recent], &ctx(), &Weights::default());
     assert_eq!(ranked[0].command, "git pull");
 }
 
@@ -67,7 +67,7 @@ fn success_beats_failure() {
     let mut failed = candidate("pytest -k broken");
     failed.exit_code = Some(1);
 
-    let ranked = rank(vec![failed, ok], &ctx());
+    let ranked = rank(vec![failed, ok], &ctx(), &Weights::default());
     assert_eq!(ranked[0].command, "pytest -x");
 }
 
@@ -83,7 +83,11 @@ fn strong_text_match_outweighs_context() {
     let mut strong_match_elsewhere = candidate("grep -r foobar baz");
     strong_match_elsewhere.fts_rank = Some(-9.0);
 
-    let ranked = rank(vec![weak_match_here, strong_match_elsewhere], &ctx());
+    let ranked = rank(
+        vec![weak_match_here, strong_match_elsewhere],
+        &ctx(),
+        &Weights::default(),
+    );
     assert_eq!(ranked[0].command, "grep -r foobar baz");
 }
 
@@ -95,7 +99,7 @@ fn duplicate_commands_are_deduped_keeping_one() {
     b.started_at = NOW - 10 * DAY_MS;
     let c = candidate("cargo clippy");
 
-    let ranked = rank(vec![a, b, c], &ctx());
+    let ranked = rank(vec![a, b, c], &ctx(), &Weights::default());
     let builds = ranked.iter().filter(|c| c.command == "cargo build").count();
     assert_eq!(builds, 1);
     assert_eq!(ranked.len(), 2);
@@ -111,7 +115,7 @@ fn tag_overlap_boosts_score() {
 
     let mut context = ctx();
     context.query_tags = vec!["deploy".to_string()];
-    let ranked = rank(vec![untagged, tagged], &context);
+    let ranked = rank(vec![untagged, tagged], &context, &Weights::default());
     assert_eq!(ranked[0].tags, "deploy");
 }
 
@@ -123,8 +127,12 @@ fn ties_break_by_recency() {
     older.started_at = NOW - DAY_MS - 1;
 
     // Identical context, near-identical recency: newer first, deterministically.
-    let ranked = rank(vec![older.clone(), newer.clone()], &ctx());
+    let ranked = rank(
+        vec![older.clone(), newer.clone()],
+        &ctx(),
+        &Weights::default(),
+    );
     assert_eq!(ranked[0].command, "echo a");
-    let ranked = rank(vec![newer, older], &ctx());
+    let ranked = rank(vec![newer, older], &ctx(), &Weights::default());
     assert_eq!(ranked[0].command, "echo a");
 }

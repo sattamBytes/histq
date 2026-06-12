@@ -1,12 +1,14 @@
 use std::io::IsTerminal;
+use std::path::PathBuf;
 
 use anyhow::{bail, Result};
 use chrono::TimeZone;
 use clap::{Parser, Subcommand};
 
+use histq::config::Config;
 use histq::db::{Candidate, Db};
 use histq::search::{self, RankContext};
-use histq::{history, shell};
+use histq::{history, import, shell, tui};
 
 #[derive(Parser)]
 #[command(name = "histq", version, about = "Project-aware shell history for zsh")]
@@ -60,11 +62,38 @@ enum Cmd {
         limit: usize,
         query: Vec<String>,
     },
+    /// Backfill the database from an existing history file (~/.zsh_history)
+    Import {
+        /// History file to import (default: ~/.zsh_history)
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
+    /// Delete entries by id, or by substring with --contains
+    Delete {
+        /// Entry ids (shown in `histq timeline` / `--contains` listings)
+        ids: Vec<i64>,
+        /// Match entries containing this exact substring (not tokenized —
+        /// works for partial secrets)
+        #[arg(long)]
+        contains: Option<String>,
+        /// Actually delete --contains matches (without it, they are only listed)
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Interactive full-screen picker (bound to Ctrl+R by `histq init zsh`)
+    Pick {
+        #[arg(long, default_value = "")]
+        query: String,
+    },
+    /// Usage statistics: top commands, failure rates, busiest hours
+    Stats {
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+    },
 }
 
-const CANDIDATE_LIMIT: usize = 500;
-
 fn main() -> Result<()> {
+    let config = Config::load()?;
     match Cli::parse().cmd {
         Cmd::Init { shell } => match shell.as_str() {
             "zsh" => {
@@ -75,15 +104,31 @@ fn main() -> Result<()> {
         },
         Cmd::RecordStart { session, command } => {
             let db = Db::open_default()?;
-            history::record_start(&db, &session, &command.join(" "))
+            let extra = config.extra_redact_patterns()?;
+            history::record_start(&db, &session, &command.join(" "), &extra)
         }
         Cmd::RecordEnd { session, exit_code } => {
             let db = Db::open_default()?;
             history::record_end(&db, &session, exit_code)
         }
-        Cmd::Previous { query, offset } | Cmd::Next { query, offset } => nth_result(&query, offset),
-        Cmd::Search { limit, query } => run_search(&query.join(" "), limit),
-        Cmd::Timeline { limit, query } => run_timeline(&query.join(" "), limit),
+        Cmd::Previous { query, offset } | Cmd::Next { query, offset } => {
+            nth_result(&config, &query, offset)
+        }
+        Cmd::Search { limit, query } => run_search(&config, &query.join(" "), limit),
+        Cmd::Timeline { limit, query } => run_timeline(&config, &query.join(" "), limit),
+        Cmd::Import { file } => run_import(&config, file),
+        Cmd::Delete { ids, contains, yes } => run_delete(ids, contains, yes),
+        Cmd::Pick { query } => {
+            let db = Db::open_default()?;
+            match tui::pick(&db, &config, &query)? {
+                Some(command) => {
+                    println!("{command}");
+                    Ok(())
+                }
+                None => std::process::exit(1),
+            }
+        }
+        Cmd::Stats { limit } => run_stats(limit),
     }
 }
 
@@ -100,12 +145,12 @@ fn rank_context(query_tags: Vec<String>) -> Result<RankContext> {
 
 /// Shared by `previous` and `next`: print the offset-th ranked result, or
 /// exit 1 with no output so the zsh widget knows to beep.
-fn nth_result(query: &str, offset: usize) -> Result<()> {
+fn nth_result(config: &Config, query: &str, offset: usize) -> Result<()> {
     let db = Db::open_default()?;
     let parsed = search::parse_query(query, chrono::Local::now());
-    let candidates = db.candidates(&parsed, CANDIDATE_LIMIT, true)?;
+    let candidates = db.candidates(&parsed, config.candidate_limit, true)?;
     let ctx = rank_context(parsed.tags.clone())?;
-    let ranked = search::rank(candidates, &ctx);
+    let ranked = search::rank(candidates, &ctx, &config.weights);
     match ranked.get(offset) {
         Some(c) => {
             println!("{}", c.command);
@@ -115,12 +160,12 @@ fn nth_result(query: &str, offset: usize) -> Result<()> {
     }
 }
 
-fn run_search(query: &str, limit: usize) -> Result<()> {
+fn run_search(config: &Config, query: &str, limit: usize) -> Result<()> {
     let db = Db::open_default()?;
     let parsed = search::parse_query(query, chrono::Local::now());
-    let candidates = db.candidates(&parsed, CANDIDATE_LIMIT, false)?;
+    let candidates = db.candidates(&parsed, config.candidate_limit, false)?;
     let ctx = rank_context(parsed.tags.clone())?;
-    let ranked = search::rank(candidates, &ctx);
+    let ranked = search::rank(candidates, &ctx, &config.weights);
     let now_ms = ctx.now_ms;
 
     for c in ranked.iter().take(limit) {
@@ -130,23 +175,177 @@ fn run_search(query: &str, limit: usize) -> Result<()> {
     Ok(())
 }
 
-fn run_timeline(query: &str, limit: usize) -> Result<()> {
+fn run_timeline(config: &Config, query: &str, limit: usize) -> Result<()> {
     let db = Db::open_default()?;
     let parsed = search::parse_query(query, chrono::Local::now());
-    let mut candidates = db.candidates(&parsed, CANDIDATE_LIMIT, false)?;
+    let mut candidates = db.candidates(&parsed, config.candidate_limit, false)?;
     candidates.sort_by_key(|c| std::cmp::Reverse(c.started_at));
 
     for c in candidates.iter().take(limit) {
-        let when = chrono::Local
-            .timestamp_millis_opt(c.started_at)
-            .single()
-            .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
-            .unwrap_or_else(|| "????-??-?? ??:??:??".into());
-        let status = exit_marker(c.exit_code);
-        let duration = c.duration_ms.map(fmt_duration).unwrap_or_default();
-        println!("{when}  {status} {duration:>8}  {}", c.command);
+        println!("{}", timeline_line(c));
     }
     Ok(())
+}
+
+fn run_import(config: &Config, file: Option<PathBuf>) -> Result<()> {
+    let path = match file {
+        Some(p) => p,
+        None => PathBuf::from(std::env::var("HOME")?).join(".zsh_history"),
+    };
+    let db = Db::open_default()?;
+    let extra = config.extra_redact_patterns()?;
+    let report = import::import_file(
+        &db,
+        &path,
+        |cmd| histq::redact::redact_with(cmd, &extra),
+        history::now_ms(),
+    )?;
+    println!(
+        "imported {} entries from {} ({} already present, skipped)",
+        report.imported,
+        path.display(),
+        report.skipped
+    );
+    if report.imported > 0 {
+        println!("note: imported entries have no directory/git/exit metadata");
+    }
+    Ok(())
+}
+
+fn run_delete(ids: Vec<i64>, contains: Option<String>, yes: bool) -> Result<()> {
+    let db = Db::open_default()?;
+
+    if ids.is_empty() && contains.is_none() {
+        bail!("nothing to delete: pass ids (see `histq timeline`) or --contains TEXT");
+    }
+
+    let mut deleted = 0;
+    if !ids.is_empty() {
+        deleted += db.delete_ids(&ids)?;
+    }
+
+    if let Some(needle) = contains {
+        let matches = db.find_containing(&needle, 1000)?;
+        if matches.is_empty() {
+            println!("no entries contain {needle:?}");
+        } else if yes {
+            let match_ids: Vec<i64> = matches.iter().map(|c| c.id).collect();
+            deleted += db.delete_ids(&match_ids)?;
+        } else {
+            for c in &matches {
+                println!("{}", timeline_line(c));
+            }
+            println!(
+                "\n{} matching entries — re-run with --yes to delete them",
+                matches.len()
+            );
+            return Ok(());
+        }
+    }
+
+    println!("deleted {deleted} entries");
+    Ok(())
+}
+
+fn run_stats(limit: usize) -> Result<()> {
+    let db = Db::open_default()?;
+    let stats = db.stats(limit)?;
+
+    if stats.total == 0 {
+        println!("no history yet");
+        return Ok(());
+    }
+
+    let pct = |n: i64| 100.0 * n as f64 / stats.total as f64;
+    println!("commands recorded : {}", stats.total);
+    println!(
+        "succeeded         : {} ({:.1}%)",
+        stats.succeeded,
+        pct(stats.succeeded)
+    );
+    println!(
+        "failed            : {} ({:.1}%)",
+        stats.failed,
+        pct(stats.failed)
+    );
+
+    if !stats.top_commands.is_empty() {
+        println!("\nmost used:");
+        let max = stats.top_commands.iter().map(|r| r.1).max().unwrap_or(1);
+        for (cmd, n, fails) in &stats.top_commands {
+            let bar = bar(*n, max, 20);
+            let fail_note = if *fails > 0 {
+                format!("  ({fails} failed)")
+            } else {
+                String::new()
+            };
+            println!("  {n:>5}  {bar}  {}{fail_note}", oneline(cmd, 60));
+        }
+    }
+
+    if !stats.failing.is_empty() {
+        println!("\nmost failing (3+ runs):");
+        for (cmd, n, fails) in &stats.failing {
+            println!(
+                "  {:>4.0}%  {fails}/{n}  {}",
+                100.0 * *fails as f64 / *n as f64,
+                oneline(cmd, 60)
+            );
+        }
+    }
+
+    if !stats.top_dirs.is_empty() {
+        println!("\nbusiest directories:");
+        for (dir, n, _) in &stats.top_dirs {
+            println!("  {n:>5}  {}", shorten_home(dir));
+        }
+    }
+
+    let hour_max = stats.by_hour.iter().copied().max().unwrap_or(0);
+    if hour_max > 0 {
+        println!("\nby hour of day:");
+        for (hour, n) in stats.by_hour.iter().enumerate() {
+            if *n > 0 {
+                println!("  {hour:>2}:00  {}  {n}", bar(*n, hour_max, 30));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn bar(n: i64, max: i64, width: usize) -> String {
+    let filled = ((n as f64 / max as f64) * width as f64).round() as usize;
+    format!(
+        "{}{}",
+        "█".repeat(filled.max(1)),
+        " ".repeat(width - filled.max(1).min(width))
+    )
+}
+
+fn oneline(s: &str, max_chars: usize) -> String {
+    let s = s.replace('\n', " ⏎ ");
+    if s.chars().count() <= max_chars {
+        s
+    } else {
+        let mut out: String = s.chars().take(max_chars - 1).collect();
+        out.push('…');
+        out
+    }
+}
+
+fn timeline_line(c: &Candidate) -> String {
+    let when = chrono::Local
+        .timestamp_millis_opt(c.started_at)
+        .single()
+        .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
+        .unwrap_or_else(|| "????-??-?? ??:??:??".into());
+    let status = exit_marker(c.exit_code);
+    let duration = c.duration_ms.map(fmt_duration).unwrap_or_default();
+    format!(
+        "{:>6}  {when}  {status} {duration:>8}  {}",
+        c.id,
+        oneline(&c.command, 100)
+    )
 }
 
 fn context_line(c: &Candidate, now_ms: i64) -> String {
