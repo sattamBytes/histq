@@ -37,7 +37,13 @@ fn record_then_navigate_roundtrip() {
     let db = dir.path().join("h.db");
 
     histq(&db)
-        .args(["record-start", "--session", "t1", "--", "cargo build --release"])
+        .args([
+            "record-start",
+            "--session",
+            "t1",
+            "--",
+            "cargo build --release",
+        ])
         .assert()
         .success();
     histq(&db)

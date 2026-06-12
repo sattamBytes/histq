@@ -38,7 +38,11 @@ pub fn git_context(start: &Path) -> GitContext {
             // Worktree or submodule: `.git` is a file containing `gitdir: <path>`.
             let gitdir = fs::read_to_string(&dotgit)
                 .ok()
-                .and_then(|s| s.trim().strip_prefix("gitdir:").map(|p| p.trim().to_string()))
+                .and_then(|s| {
+                    s.trim()
+                        .strip_prefix("gitdir:")
+                        .map(|p| p.trim().to_string())
+                })
                 .map(|p| {
                     let p = PathBuf::from(p);
                     if p.is_absolute() {

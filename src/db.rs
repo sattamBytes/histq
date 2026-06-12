@@ -72,7 +72,9 @@ impl Db {
     }
 
     fn migrate(&self) -> Result<()> {
-        let version: i32 = self.conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        let version: i32 = self
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version < 1 {
             self.conn.execute_batch(
                 r#"

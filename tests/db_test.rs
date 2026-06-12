@@ -41,7 +41,8 @@ fn record_end_without_pending_command_is_a_noop() {
 #[test]
 fn record_end_only_touches_its_own_session() {
     let (_dir, db) = temp_db();
-    db.record_start(&entry("sleep 100", "tab-a", 1_000)).unwrap();
+    db.record_start(&entry("sleep 100", "tab-a", 1_000))
+        .unwrap();
     db.record_start(&entry("ls", "tab-b", 2_000)).unwrap();
     assert!(db.record_end("tab-b", 0, 2_100).unwrap());
 
@@ -67,15 +68,25 @@ fn record_end_finalizes_the_newest_pending_command() {
 #[test]
 fn completed_only_excludes_pending_rows() {
     let (_dir, db) = temp_db();
-    db.record_start(&entry("still running", "s1", 1_000)).unwrap();
-    assert!(db.candidates(&ParsedQuery::default(), 10, true).unwrap().is_empty());
-    assert_eq!(db.candidates(&ParsedQuery::default(), 10, false).unwrap().len(), 1);
+    db.record_start(&entry("still running", "s1", 1_000))
+        .unwrap();
+    assert!(db
+        .candidates(&ParsedQuery::default(), 10, true)
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        db.candidates(&ParsedQuery::default(), 10, false)
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[test]
 fn fts_index_stays_in_sync_through_insert_and_update() {
     let (_dir, db) = temp_db();
-    db.record_start(&entry("docker compose up", "s1", 1_000)).unwrap();
+    db.record_start(&entry("docker compose up", "s1", 1_000))
+        .unwrap();
     db.record_end("s1", 0, 2_000).unwrap();
 
     let q = parse_query("docker", chrono::Local::now());

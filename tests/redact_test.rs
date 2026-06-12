@@ -52,7 +52,10 @@ fn aws_access_key_id_is_redacted() {
 #[test]
 fn github_token_is_redacted() {
     let out = redact("git clone https://ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ012345@github.com/x/y");
-    assert!(!out.contains("ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ012345"), "got: {out}");
+    assert!(
+        !out.contains("ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ012345"),
+        "got: {out}"
+    );
 }
 
 #[test]
